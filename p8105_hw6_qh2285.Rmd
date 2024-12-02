@@ -52,7 +52,8 @@ bootstrap_results <-
     names_from = term,
     values_from = estimate) |> 
   mutate(
-    log_b1b2 = log(tmin * prcp)
+    abs_prcp = abs(prcp),
+    log_b1b2 = log(tmin * abs_prcp)
   ) |> 
   select(id, r.squared, log_b1b2)
 ```
@@ -88,3 +89,85 @@ c(LB_b, UB_b)|>
 
 
 The distribution of $log(\hat{\beta_1} * \hat{\beta_2})$ exhibits a pronounced left-skew, stretching from -12 to -4, and predominantly centers around -5.5. The distribution's 2.5% and 97.5% quantiles are `r LB_b |> round(3)` and `r UB_b |> round(3)`, respectively, defining a 95% confidence interval represented as (`r LB_b |> round(3)`, `r UB_b |> round(3)`).
+
+
+
+## Problem 2
+
+```{r homicide_data cleaning}
+omit_location = c("Dallas, TX", "Phoenix, AZ", "Kansas City, MO", "Tulsa, AL")
+omit_race = c("White", "Black")
+
+homicide = read_csv("data/homicide-data.csv")
+homicide = homicide |>
+  mutate(city_state = str_c(city, state, sep = ", "),
+         resolved = as.numeric(disposition == "Closed by arrest"),
+         victim_age = as.numeric(victim_age)) |>
+  filter(!city_state %in% omit_location & 
+         victim_race %in% omit_race &
+         victim_sex != "Unknown") |>
+  drop_na(victim_age) |>
+  select(resolved, victim_age, victim_race, victim_sex, city_state)
+
+```
+
+
+```{r fit glm}
+logit_model = homicide |> 
+  filter(city_state == "Baltimore, MD") |>
+  glm(resolved ~ victim_age + victim_sex + victim_race, data = _, family = "binomial")
+broom::tidy(logit_model, conf.int = T) |>
+  mutate(OR = exp(estimate),
+         OR.conf.low = exp(conf.low),
+         OR.conf.high = exp(conf.high)) |>
+  filter(str_detect(term, "sex")) |>
+  select(term, OR, OR.conf.low, OR.conf.high) |>
+  knitr::kable(digits = 3)
+  
+```
+
+
+```{r glm for each city}
+tidy_stats = function(city, df){
+  df |> 
+    filter(city_state == city) |>
+    glm(resolved ~ victim_age + victim_sex + victim_race, data = _, family = "binomial") |>
+    broom::tidy(conf.int = T) |>
+    mutate(OR = exp(estimate),
+           OR.conf.low = exp(conf.low),
+           OR.conf.high = exp(conf.high)) |>
+    filter(str_detect(term, "sex")) |>
+    select(term, OR, OR.conf.low, OR.conf.high)
+}
+
+cities = homicide |> pull(city_state) |> unique()
+test_on_city = tibble(
+  city = cities,
+  hypo = map(cities, tidy_stats, df = homicide)
+) |> unnest(hypo) |>
+  select(-term)
+test_on_city |>
+  knitr::kable(digits = 3)
+
+```
+
+
+```{r plot}
+test_on_city |>
+  mutate(city = fct_reorder(city, OR)) |>
+  ggplot(aes(x = city, y = OR, color = city)) +
+  geom_point() +
+  geom_errorbar(aes(ymin = OR.conf.low, ymax = OR.conf.high)) +
+  theme_bw() +
+  labs(x = "city", y = "OR", title = "OR of sex") +
+  theme(plot.title = element_text(hjust = 0.5), axis.title.x=element_blank(),
+        axis.text.x=element_blank(), axis.ticks.x=element_blank())
+
+```
+
+
+Summary:
+* The majority of cities show odds ratios (OR) less than 1, indicating that, after adjusting for victim age and race, crimes involving male victims are less likely to be resolved compared to those with female victims.
+* Albuquerque, NM stands out with a notably higher OR, suggesting the opposite trend in this city: crimes with female victims have lower odds of resolution.
+
+

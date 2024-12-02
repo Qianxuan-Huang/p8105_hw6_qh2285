@@ -98,7 +98,8 @@ The distribution of $log(\hat{\beta_1} * \hat{\beta_2})$ exhibits a pronounced l
 omit_location = c("Dallas, TX", "Phoenix, AZ", "Kansas City, MO", "Tulsa, AL")
 omit_race = c("White", "Black")
 
-homicide = read_csv("data/homicide-data.csv")
+homicide = read_csv("data/homicide-data.csv") |> 
+            janitor::clean_names()
 homicide = homicide |>
   mutate(city_state = str_c(city, state, sep = ", "),
          resolved = as.numeric(disposition == "Closed by arrest"),
@@ -155,19 +156,105 @@ test_on_city |>
 ```{r plot}
 test_on_city |>
   mutate(city = fct_reorder(city, OR)) |>
-  ggplot(aes(x = city, y = OR, color = city)) +
+  ggplot(aes(x = city, y = OR)) +
   geom_point() +
   geom_errorbar(aes(ymin = OR.conf.low, ymax = OR.conf.high)) +
   theme_bw() +
   labs(x = "city", y = "OR", title = "OR of sex") +
-  theme(plot.title = element_text(hjust = 0.5), axis.title.x=element_blank(),
-        axis.text.x=element_blank(), axis.ticks.x=element_blank())
+  theme(plot.title = element_text(hjust = 0.3),
+              axis.text.x = element_text(angle = 60, hjust = 1),
+              axis.text = element_text(size = 8) )
 
 ```
 
 
 Summary:
 * The majority of cities show odds ratios (OR) less than 1, indicating that, after adjusting for victim age and race, crimes involving male victims are less likely to be resolved compared to those with female victims.
-* Albuquerque, NM stands out with a notably higher OR, suggesting the opposite trend in this city: crimes with female victims have lower odds of resolution.
+* Albuquerque, NM stands out with a highest OR, suggesting the most opposite trend in this city: crimes with female victims have much lower odds of resolution comparing to others.
+
+
+## Problem 3
+
+```{r data import}
+bw_df <-
+  read_csv("data/birthweight.csv", na = c("", ".")) |> 
+            janitor::clean_names()
+```
+
+
+```{r data cleaning}
+bw_df_clean <-
+  bw_df |> 
+  mutate(
+    babysex = as.factor(babysex),
+    frace = as.factor(frace),
+    malform = as.factor(malform),
+    mrace = as.factor(mrace)
+  ) |> 
+  select(bwt, everything())
+```
+
+
+```{r fit the model}
+hypo_model = lm(bwt ~ bhead + blength + delwt + gaweeks + malform + smoken , data = bw_df_clean)
+summary(hypo_model) |> broom::tidy()
+# because malform1 has p-value > 0.05, we remove it from the model
+my_model = lm(bwt ~ bhead + blength + delwt + gaweeks + smoken , data = bw_df_clean)
+summary(my_model) |> broom::tidy()
+```
+
+Comments:
+Initially, I formulated a primary model to investigate factors affecting children's birth weights, incorporating six predictors: `bhead`, `blength`, `delwt`, `gaweeks`, `malform1`, and `smoken`. Upon conducting backward elimination, I found that the `malform` variable had the highest p-value of 0.61, exceeding the alpha threshold of 0.05. Consequently, I removed `malform` and refitted the model with the remaining five predictors. In this revised model, all coefficients exhibited p-values below 0.05. Therefore, the final model retained `bhead`, `blength`, `delwt`, `gaweeks`, and `smoken` as significant predictors.
+
+
+```{r residuals - fitted values}
+bw_df_clean |> 
+  add_predictions(my_model) |> 
+  add_residuals(my_model) |> 
+  ggplot(aes(x = pred, y = resid)) +
+  geom_point(alpha = 0.5, size = 0.5) +
+  geom_smooth() +
+  labs(title = "Model residuals against fitted values")
+```
+
+```{r cross validation}
+# cv
+model_1 = lm(bwt ~ blength + gaweeks, data = bw_df_clean)
+model_2 = lm(bwt ~ bhead + blength + babysex + 
+               bhead * blength + bhead * babysex + blength * babysex, data = bw_df_clean)
+cv_df <-
+  crossv_mc(bw_df_clean, 100) 
+
+cv_df <-  
+  cv_df |> 
+  mutate(
+    my_model  = map(train, \(df) lm(bwt ~ bhead + blength + delwt + gaweeks + smoken, 
+                                    data = df)),
+    model_1  = map(train, \(df) lm(bwt ~ blength + gaweeks, data = df)),
+    model_2  = map(train, \(df) lm(bwt ~ bhead + blength + babysex + 
+               bhead * blength + bhead * babysex + blength * babysex, data = df))) |> 
+  mutate(
+    rmse_my_model = map2_dbl(my_model, test, \(mod, df) rmse(model = mod, data = df)),
+    rmse_model_1 = map2_dbl(model_1, test, \(mod, df) rmse(model = mod, data = df)),
+    rmse_model_2 = map2_dbl(model_2, test, \(mod, df) rmse(model = mod, data = df)))
+```
+
+
+```{r violin plot}
+cv_df |> 
+  select(starts_with("rmse")) |> 
+  pivot_longer(
+    everything(),
+    names_to = "model", 
+    values_to = "rmse",
+    names_prefix = "rmse_") |> 
+  mutate(model = fct_inorder(model)) |> 
+  ggplot(aes(x = model, y = rmse, fill = model)) + geom_violin()
+```
+
+Comments:
+Based on the violin plot, my_model exhibits the lowest rmse value, while model_2 has a rmse that is marginally higher than that of my_model. In contrast, Model_1 displays a significantly higher rmse in comparison to the other models, suggesting that its predictions might be less precise than those made by the other two models.
+
+
 
 
